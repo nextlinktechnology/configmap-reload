@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/fsnotify/fsnotify v1.5.1
 	github.com/prometheus/client_golang v1.12.2
+	github.com/teltech/logger v1.2.2
 )
 
 require (

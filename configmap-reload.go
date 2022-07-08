@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,11 +13,13 @@ import (
 	fsnotify "github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/teltech/logger"
 )
 
 const namespace = "configmap_reload"
 
 var (
+	log               *logger.Log
 	volumeDirs        volumeDirsFlag
 	webhook           webhookFlag
 	webhookMethod     = flag.String("webhook-method", "POST", "the HTTP method url to use to send the webhook")
@@ -60,6 +61,7 @@ var (
 )
 
 func init() {
+	log = logger.New()
 	prometheus.MustRegister(lastReloadError)
 	prometheus.MustRegister(requestDuration)
 	prometheus.MustRegister(successReloads)
@@ -74,22 +76,20 @@ func main() {
 	flag.Parse()
 
 	if len(volumeDirs) < 1 {
-		log.Println("Missing volume-dir")
-		log.Println()
+		log.Error("Missing volume-dir")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	if len(webhook) < 1 {
-		log.Println("Missing webhook-url")
-		log.Println()
+		log.Error("Missing webhook-url")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(err.Error())
 	}
 	defer watcher.Close()
 
@@ -100,13 +100,13 @@ func main() {
 				if !isValidEvent(event) {
 					continue
 				}
-				log.Println("config map updated")
+				log.Info("config map updated")
 				for _, h := range webhook {
 					begun := time.Now()
 					req, err := http.NewRequest(*webhookMethod, h.String(), nil)
 					if err != nil {
 						setFailureMetrics(h.String(), "client_request_create")
-						log.Println("error:", err)
+						log.Errorf("error: %s", err.Error())
 						continue
 					}
 					userInfo := h.User
@@ -119,11 +119,11 @@ func main() {
 					successfulReloadWebhook := false
 
 					for retries := *webhookRetries; retries != 0; retries-- {
-						log.Printf("performing webhook request (%d/%d)", retries, *webhookRetries)
+						log.Infof("performing webhook request (%d/%d)", retries, *webhookRetries)
 						resp, err := http.DefaultClient.Do(req)
 						if err != nil {
 							setFailureMetrics(h.String(), "client_request_do")
-							log.Println("error:", err)
+							log.Errorf("error: %s", err.Error())
 							time.Sleep(time.Second * 10)
 							continue
 						}
@@ -131,38 +131,38 @@ func main() {
 						requestsByStatusCode.WithLabelValues(h.String(), strconv.Itoa(resp.StatusCode)).Inc()
 						if resp.StatusCode != *webhookStatusCode {
 							setFailureMetrics(h.String(), "client_response")
-							log.Println("error:", "Received response code", resp.StatusCode, ", expected", *webhookStatusCode)
+							log.Errorf("error: Received response code %d, expected %d", resp.StatusCode, *webhookStatusCode)
 							time.Sleep(time.Second * 10)
 							continue
 						}
 
 						setSuccessMetrics(h.String(), begun)
-						log.Println("successfully triggered reload")
+						log.Info("successfully triggered reload")
 						successfulReloadWebhook = true
 						break
 					}
 
 					if !successfulReloadWebhook {
 						setFailureMetrics(h.String(), "retries_exhausted")
-						log.Println("error:", "Webhook reload retries exhausted")
+						log.Error("error: Webhook reload retries exhausted")
 					}
 				}
 			case err := <-watcher.Errors:
 				watcherErrors.Inc()
-				log.Println("error:", err)
+				log.Errorf("error: %s", err)
 			}
 		}
 	}()
 
 	for _, d := range volumeDirs {
-		log.Printf("Watching directory: %q", d)
+		log.Infof("Watching directory: %q", d)
 		err = watcher.Add(d)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(err.Error())
 		}
 	}
 
-	log.Fatal(serverMetrics(*listenAddress, *metricPath))
+	log.Fatal(serverMetrics(*listenAddress, *metricPath).Error())
 }
 
 func setFailureMetrics(h, reason string) {
